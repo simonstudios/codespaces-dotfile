@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-log() { echo "[dotfiles] $*"; }
+# ========================================
+# Register MongoDB MCP (project-specific)
+# ========================================
+# This runs via postAttachCommand, AFTER dotfiles have completed
 
-# ========================================
-# 0) Ensure npm global bin is in PATH
-# ========================================
+# Ensure npm global bin is in PATH (where Claude CLI is installed)
 if command -v npm >/dev/null 2>&1; then
   NPM_BIN_GLOBAL="$(npm bin -g 2>/dev/null || true)"
   if [ -n "${NPM_BIN_GLOBAL:-}" ] && ! echo ":$PATH:" | grep -q ":${NPM_BIN_GLOBAL}:"; then
@@ -14,136 +15,51 @@ if command -v npm >/dev/null 2>&1; then
   fi
 fi
 
-# ========================================
-# 1) Install Claude CLI globally
-# ========================================
-if command -v npm >/dev/null 2>&1; then
-  if ! command -v claude >/dev/null 2>&1; then
-    log "Installing Claude Code CLI..."
-    npm install -g @anthropic-ai/claude-code
-    hash -r || true
+echo "Registering project-specific MongoDB MCP..."
+
+# Register MongoDB in Claude CLI (dotfiles should have installed claude)
+if command -v claude >/dev/null 2>&1; then
+  if claude mcp list 2>/dev/null | grep -qE "^[[:space:]]*mongodb[[:space:]]*$"; then
+    echo "MongoDB MCP already registered in Claude"
   else
-    log "Claude Code CLI already installed"
+    echo "Registering MongoDB MCP in Claude..."
+    claude mcp add --transport stdio mongodb -- npx mongodb-mcp-server
+    echo "MongoDB MCP registered successfully"
   fi
 else
-  log "npm not found; skipping Claude CLI install"
+  echo "Warning: Claude CLI not found. Ensure dotfiles are configured with Claude CLI."
 fi
 
-# ========================================
-# 2) Configure Codex MCP (Context7 + Tavily only)
-# ========================================
-# MongoDB is project-specific and handled by the repo's postStartCommand
-mkdir -p "${HOME}/.codex"
+# Ensure Codex config has MongoDB (idempotent)
 CONFIG_PATH="${HOME}/.codex/config.toml"
+if [ -f "${CONFIG_PATH}" ]; then
+  if ! grep -q '^\[mcp_servers\.mongodb\]' "${CONFIG_PATH}"; then
+    echo "Adding MongoDB to existing Codex config..."
+    cat >> "${CONFIG_PATH}" <<'EOF'
 
-if [ ! -f "${CONFIG_PATH}" ]; then
-  log "Creating ${CONFIG_PATH} with global MCP servers..."
+[mcp_servers.mongodb]
+command = "npx"
+args = ["-y", "mongodb-mcp-server"]
+env = {}
+EOF
+    echo "MongoDB added to Codex config"
+  else
+    echo "MongoDB already in Codex config"
+  fi
+else
+  # Create minimal config with MongoDB if dotfiles didn't create one
+  echo "Creating Codex config with MongoDB..."
+  mkdir -p "${HOME}/.codex"
   cat > "${CONFIG_PATH}" <<'EOF'
 # Codex MCP Server Configuration
 # IMPORTANT: the top-level key is 'mcp_servers'
-EOF
-else
-  log "Found existing ${CONFIG_PATH}"
-fi
 
-# Add Context7 (only if API key is set)
-if [ -n "${CONTEXT7_API_KEY:-}" ]; then
-  if ! grep -q '^\[mcp_servers\.context7\]' "${CONFIG_PATH}"; then
-    cat >> "${CONFIG_PATH}" <<EOF
-
-[mcp_servers.context7]
+[mcp_servers.mongodb]
 command = "npx"
-args = ["-y", "@upstash/context7-mcp", "--api-key", "${CONTEXT7_API_KEY}"]
+args = ["-y", "mongodb-mcp-server"]
 env = {}
 EOF
-    log "Added Context7 to Codex config"
-  else
-    log "Context7 already in Codex config"
-  fi
-else
-  log "CONTEXT7_API_KEY not set; skipping Context7"
+  echo "Codex config created with MongoDB"
 fi
 
-# Add Tavily (only if API key is set)
-if [ -n "${TAVILY_API_KEY:-}" ]; then
-  if ! grep -q '^\[mcp_servers\.tavily\]' "${CONFIG_PATH}"; then
-    cat >> "${CONFIG_PATH}" <<EOF
-
-[mcp_servers.tavily]
-command = "npx"
-args = ["-y", "mcp-remote", "https://mcp.tavily.com/mcp/?tavilyApiKey=${TAVILY_API_KEY}"]
-env = {}
-EOF
-    log "Added Tavily to Codex config"
-  else
-    log "Tavily already in Codex config"
-  fi
-else
-  log "TAVILY_API_KEY not set; skipping Tavily"
-fi
-
-# ========================================
-# 3) Register MCP servers in Claude CLI
-# ========================================
-if command -v claude >/dev/null 2>&1; then
-  add_mcp_if_missing() {
-    local name="$1"; shift
-    if claude mcp list 2>/dev/null | grep -qE "^[[:space:]]*${name}[[:space:]]*$"; then
-      log "MCP already registered: ${name}"
-    else
-      log "Registering MCP: ${name}"
-      claude mcp add --transport stdio "${name}" -- "$@"
-    fi
-  }
-
-  # Register Context7 if key is present
-  if [ -n "${CONTEXT7_API_KEY:-}" ]; then
-    add_mcp_if_missing context7 npx @upstash/context7-mcp --api-key "${CONTEXT7_API_KEY}"
-  else
-    log "CONTEXT7_API_KEY not set; skipping Context7 registration"
-  fi
-
-  # Register Tavily if key is present
-  if [ -n "${TAVILY_API_KEY:-}" ]; then
-    add_mcp_if_missing tavily npx -y mcp-remote "https://mcp.tavily.com/mcp/?tavilyApiKey=${TAVILY_API_KEY}"
-  else
-    log "TAVILY_API_KEY not set; skipping Tavily registration"
-  fi
-else
-  log "Claude CLI not found; skipping MCP registrations"
-fi
-
-# ========================================
-# 4) Configure VS Code MCP settings
-# ========================================
-# This creates a global VS Code MCP config for Context7 and GitHub
-VSCODE_DIR="${HOME}/.vscode"
-MCP_CONFIG="${VSCODE_DIR}/mcp.json"
-
-if [ ! -d "${VSCODE_DIR}" ]; then
-  mkdir -p "${VSCODE_DIR}"
-  log "Created ${VSCODE_DIR} directory"
-fi
-
-if [ ! -f "${MCP_CONFIG}" ]; then
-  log "Creating VS Code MCP config..."
-  cat > "${MCP_CONFIG}" <<'EOF'
-{
-	"servers": {
-		"context7": {
-			"type": "http",
-			"url": "https://mcp.context7.com/mcp"
-		},
-		"github": {
-			"type": "http",
-			"url": "https://api.githubcopilot.com/mcp/"
-		}
-	}
-}
-EOF
-  log "VS Code MCP config created at ${MCP_CONFIG}"
-else
-  log "VS Code MCP config already exists at ${MCP_CONFIG}"
-fi
-
-log "Global LLM/MCP setup complete"
+echo "MongoDB MCP registration complete"
