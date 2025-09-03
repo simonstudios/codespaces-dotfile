@@ -141,24 +141,51 @@ else
 fi
 
 # ========================================
-# 4) Configure VS Code MCP settings (Context7 + GitHub)
+# 4) Configure VS Code MCP settings (Context7 + Tavily)
 # ========================================
-VSCODE_DIR="${HOME}/.vscode"
-MCP_CONFIG="${VSCODE_DIR}/mcp.json"
-mkdir -p "${VSCODE_DIR}"
-if [ ! -f "${MCP_CONFIG}" ]; then
-  log "Creating VS Code MCP config..."
-  cat > "${MCP_CONFIG}" <<'EOF'
+write_vscode_mcp() {
+  local target_dir="$1"; shift
+  local target_file="${target_dir}/mcp.json"
+  mkdir -p "${target_dir}"
+
+  # Build config with Context7 (no auth) and Tavily (input prompt for API key)
+  # We avoid persisting keys. If TAVILY_API_KEY is set, we prefill default to reduce friction.
+  local tavily_default=""
+  if [ -n "${TAVILY_API_KEY:-}" ]; then
+    tavily_default=",\n      \"default\": \"${TAVILY_API_KEY}\""
+  fi
+
+  cat > "${target_file}" <<EOF
 {
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "tavily-api-key",
+      "description": "Tavily API Key"${tavily_default},
+      "password": true
+    }
+  ],
   "servers": {
-    "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" },
-    "github":   { "type": "http", "url": "https://api.githubcopilot.com/mcp/" }
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp"
+    },
+    "tavily": {
+      "type": "http",
+      "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=\${input:tavily-api-key}"
+    }
   }
 }
 EOF
-  log "VS Code MCP config created at ${MCP_CONFIG}"
-else
-  log "VS Code MCP config already exists at ${MCP_CONFIG}"
+  log "VS Code MCP config written at ${target_file}"
+}
+
+# Write for the current HOME (dotfiles usually run as 'codespace')
+write_vscode_mcp "${HOME}/.vscode"
+
+# If the devcontainer uses a different remoteUser (e.g., node), also write there
+if id node >/dev/null 2>&1 && [ -d "/home/node" ]; then
+  write_vscode_mcp "/home/node/.vscode"
 fi
 
 log "Global LLM/MCP setup complete"
