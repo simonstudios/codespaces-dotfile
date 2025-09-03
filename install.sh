@@ -104,6 +104,9 @@ else
   log "TAVILY_API_KEY not set; skipping Tavily in Codex config"
 fi
 
+# Ensure MongoDB MCP exists in Codex config (no secrets persisted)
+# Do not add MongoDB here; it's project-specific and configured in the repo
+
 # ========================================
 # 3) Register MCP Servers in Claude (idempotent, project-scoped)
 # ========================================
