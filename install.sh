@@ -153,18 +153,16 @@ write_vscode_mcp() {
 
   # Build config with Context7 (no auth) and Tavily (input prompt for API key)
   # We avoid persisting keys. If TAVILY_API_KEY is set, we prefill default to reduce friction.
-  local tavily_default=""
   if [ -n "${TAVILY_API_KEY:-}" ]; then
-    tavily_default=",\n      \"default\": \"${TAVILY_API_KEY}\""
-  fi
-
-  cat > "${target_file}" <<EOF
+    # Write JSON with a default prefilled (escape ${...} placeholder)
+    cat > "${target_file}" <<EOF
 {
   "inputs": [
     {
       "type": "promptString",
       "id": "tavily-api-key",
-      "description": "Tavily API Key"${tavily_default},
+      "description": "Tavily API Key",
+      "default": "${TAVILY_API_KEY}",
       "password": true
     }
   ],
@@ -180,6 +178,32 @@ write_vscode_mcp() {
   }
 }
 EOF
+  else
+    # No default persisted; VS Code will prompt. Single-quoted heredoc preserves ${input:...}
+    cat > "${target_file}" <<'EOF'
+{
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "tavily-api-key",
+      "description": "Tavily API Key",
+      "password": true
+    }
+  ],
+  "servers": {
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp"
+    },
+    "tavily": {
+      "type": "http",
+      "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=${input:tavily-api-key}"
+    }
+  }
+}
+EOF
+  fi
+
   log "VS Code MCP config written at ${target_file}"
 }
 
@@ -217,3 +241,4 @@ PROMPT='%n@%m:%~%# '
 EOF
   log "Appended codex-dotfiles zshrc block to ~/.zshrc"
 fi
+
