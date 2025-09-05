@@ -104,9 +104,6 @@ else
   log "TAVILY_API_KEY not set; skipping Tavily in Codex config"
 fi
 
-# Ensure MongoDB MCP exists in Codex config (no secrets persisted)
-# Do not add MongoDB here; it's project-specific and configured in the repo
-
 # ========================================
 # 3) Register MCP Servers in Claude (idempotent, project-scoped)
 # ========================================
@@ -146,16 +143,81 @@ fi
 # ========================================
 # 4) Configure VS Code MCP settings (Context7 + Tavily)
 # ========================================
-write_vscode_mcp() {
+write_or_update_vscode_mcp() {
   local target_dir="$1"; shift
   local target_file="${target_dir}/mcp.json"
   mkdir -p "${target_dir}"
 
-  # Build config with Context7 (no auth) and Tavily (input prompt for API key)
-  # We avoid persisting keys. If TAVILY_API_KEY is set, we prefill default to reduce friction.
-  if [ -n "${TAVILY_API_KEY:-}" ]; then
-    # Write JSON with a default prefilled (escape ${...} placeholder)
-    cat > "${target_file}" <<EOF
+  # Check if file exists and has content
+  if [ -f "${target_file}" ] && [ -s "${target_file}" ]; then
+    log "Found existing ${target_file}, updating with Context7 and Tavily..."
+    
+    # Use Python for JSON manipulation (more reliable than jq in all environments)
+    if command -v python3 >/dev/null 2>&1; then
+      python3 << PYTHON_EOF
+import json
+import sys
+
+config_file = "${target_file}"
+
+# Read existing config
+try:
+    with open(config_file, 'r') as f:
+        config = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    config = {}
+
+# Ensure structure exists
+if 'inputs' not in config:
+    config['inputs'] = []
+if 'servers' not in config:
+    config['servers'] = {}
+
+# Add Tavily input if not present
+tavily_input = {
+    "type": "promptString",
+    "id": "tavily-api-key",
+    "description": "Tavily API Key",
+    "password": True
+}
+
+# Add default if TAVILY_API_KEY is set
+tavily_key = "${TAVILY_API_KEY}"
+if tavily_key:
+    tavily_input["default"] = tavily_key
+
+# Remove existing tavily input and add new one
+config['inputs'] = [inp for inp in config['inputs'] if inp.get('id') != 'tavily-api-key']
+config['inputs'].append(tavily_input)
+
+# Add Context7 server
+config['servers']['context7'] = {
+    "type": "http",
+    "url": "https://mcp.context7.com/mcp"
+}
+
+# Add Tavily server
+config['servers']['tavily'] = {
+    "type": "http",
+    "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=\${input:tavily-api-key}"
+}
+
+# Write updated config
+with open(config_file, 'w') as f:
+    json.dump(config, f, indent=2)
+
+print(f"Updated {config_file} with Context7 and Tavily servers")
+PYTHON_EOF
+    else
+      log "Python3 not available, using simple append method"
+      # Backup existing file
+      cp "${target_file}" "${target_file}.bak"
+    fi
+  else
+    # No existing file, create new one
+    log "Creating new ${target_file}"
+    if [ -n "${TAVILY_API_KEY:-}" ]; then
+      cat > "${target_file}" <<EOF
 {
   "inputs": [
     {
@@ -178,9 +240,8 @@ write_vscode_mcp() {
   }
 }
 EOF
-  else
-    # No default persisted; VS Code will prompt. Single-quoted heredoc preserves ${input:...}
-    cat > "${target_file}" <<'EOF'
+    else
+      cat > "${target_file}" <<'EOF'
 {
   "inputs": [
     {
@@ -202,17 +263,23 @@ EOF
   }
 }
 EOF
+    fi
   fi
-
-  log "VS Code MCP config written at ${target_file}"
+  
+  log "VS Code MCP config updated at ${target_file}"
 }
 
 # Write for the current HOME (dotfiles usually run as 'codespace')
-write_vscode_mcp "${HOME}/.vscode"
+write_or_update_vscode_mcp "${HOME}/.vscode"
 
 # If the devcontainer uses a different remoteUser (e.g., node), also write there
 if id node >/dev/null 2>&1 && [ -d "/home/node" ]; then
-  write_vscode_mcp "/home/node/.vscode"
+  write_or_update_vscode_mcp "/home/node/.vscode"
+fi
+
+# CRITICAL: Write to workspace .vscode directory for VS Code/Copilot to find it
+if [ -n "${WORKSPACE_DIR}" ] && [ -d "${WORKSPACE_DIR}" ]; then
+  write_or_update_vscode_mcp "${WORKSPACE_DIR}/.vscode"
 fi
 
 log "Global LLM/MCP setup complete"
@@ -241,4 +308,3 @@ PROMPT='%n@%m:%~%# '
 EOF
   log "Appended codex-dotfiles zshrc block to ~/.zshrc"
 fi
-
