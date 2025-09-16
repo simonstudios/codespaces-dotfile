@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
+# Resilient dotfiles installer for MCP tooling
+# - Safe with `set -u` (binds optional envs to empty)
+# - Skips optional integrations when keys are missing
+# - Uses Python to avoid shell-expanding JSON placeholders
+
 set -euo pipefail
+
+# Bind optional keys to empty so `set -u` never crashes on expansion
+: "${CONTEXT7_API_KEY:=}"
+: "${TAVILY_API_KEY:=}"
+: "${OPENAI_API_KEY:=}"
 
 log() { echo "[dotfiles] $*"; }
 
@@ -13,6 +23,8 @@ if command -v npm >/dev/null 2>&1; then
     export PATH="${NPM_BIN_GLOBAL}:$PATH"
     hash -r || true
   fi
+else
+  log "npm not found; skipping npm -g PATH integration"
 fi
 
 # ========================================
@@ -31,7 +43,6 @@ else
 fi
 
 # Detect workspace folder for project-scoped Claude config
-# Prefer known env vars; fallback to scanning /workspaces
 WORKSPACE_DIR=""
 if [ -n "${WORKSPACE_FOLDER:-}" ] && [ -d "${WORKSPACE_FOLDER}" ]; then
   WORKSPACE_DIR="${WORKSPACE_FOLDER}"
@@ -151,14 +162,16 @@ write_or_update_vscode_mcp() {
   # Check if file exists and has content
   if [ -f "${target_file}" ] && [ -s "${target_file}" ]; then
     log "Found existing ${target_file}, updating with Context7 and Tavily..."
-    
-    # Use Python for JSON manipulation (more reliable than jq in all environments)
-    if command -v python3 >/dev/null 2>&1; then
-      python3 << PYTHON_EOF
-import json
-import sys
 
-config_file = "${target_file}"
+    if command -v python3 >/dev/null 2>&1; then
+      # Pass path via env; read TAVILY_API_KEY from env inside Python
+      VSCODE_MCP_TARGET="${target_file}" python3 << 'PYTHON_EOF'
+import json
+import os
+
+config_file = os.environ.get("VSCODE_MCP_TARGET", "")
+if not config_file:
+    raise SystemExit("VSCODE_MCP_TARGET not set")
 
 # Read existing config
 try:
@@ -173,33 +186,29 @@ if 'inputs' not in config:
 if 'servers' not in config:
     config['servers'] = {}
 
-# Add Tavily input if not present
+# Add/refresh Tavily input
 tavily_input = {
     "type": "promptString",
     "id": "tavily-api-key",
     "description": "Tavily API Key",
     "password": True
 }
-
-# Add default if TAVILY_API_KEY is set
-tavily_key = "${TAVILY_API_KEY}"
+tavily_key = os.environ.get("TAVILY_API_KEY", "")
 if tavily_key:
     tavily_input["default"] = tavily_key
-
-# Remove existing tavily input and add new one
 config['inputs'] = [inp for inp in config['inputs'] if inp.get('id') != 'tavily-api-key']
 config['inputs'].append(tavily_input)
 
-# Add Context7 server
+# Add/refresh Context7 server
 config['servers']['context7'] = {
     "type": "http",
     "url": "https://mcp.context7.com/mcp"
 }
 
-# Add Tavily server
+# Add/refresh Tavily server (prompted if key not set)
 config['servers']['tavily'] = {
     "type": "http",
-    "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=\${input:tavily-api-key}"
+    "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=${input:tavily-api-key}"
 }
 
 # Write updated config
@@ -209,9 +218,9 @@ with open(config_file, 'w') as f:
 print(f"Updated {config_file} with Context7 and Tavily servers")
 PYTHON_EOF
     else
-      log "Python3 not available, using simple append method"
-      # Backup existing file
+      log "Python3 not available, falling back to simple append (skipping JSON merge)"
       cp "${target_file}" "${target_file}.bak"
+      # No safe generic append without breaking JSON; recommend Python
     fi
   else
     # No existing file, create new one
@@ -265,11 +274,11 @@ EOF
 EOF
     fi
   fi
-  
+
   log "VS Code MCP config updated at ${target_file}"
 }
 
-# Write for the current HOME (dotfiles usually run as 'codespace')
+# Write for the current HOME (dotfiles usually run as the default user)
 write_or_update_vscode_mcp "${HOME}/.vscode"
 
 # If the devcontainer uses a different remoteUser (e.g., node), also write there
@@ -308,3 +317,4 @@ PROMPT='%n@%m:%~%# '
 EOF
   log "Appended codex-dotfiles zshrc block to ~/.zshrc"
 fi
+
