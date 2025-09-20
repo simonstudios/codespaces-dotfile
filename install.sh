@@ -161,7 +161,7 @@ write_or_update_vscode_mcp() {
 
   # Check if file exists and has content
   if [ -f "${target_file}" ] && [ -s "${target_file}" ]; then
-    log "Found existing ${target_file}, updating with Context7 and Tavily..."
+    log "Found existing ${target_file}, normalising Context7/Tavily entries..."
 
     if command -v python3 >/dev/null 2>&1; then
       # Pass path via env; read TAVILY_API_KEY from env inside Python
@@ -186,18 +186,11 @@ if 'inputs' not in config:
 if 'servers' not in config:
     config['servers'] = {}
 
-# Add/refresh Tavily input
-tavily_input = {
-    "type": "promptString",
-    "id": "tavily-api-key",
-    "description": "Tavily API Key",
-    "password": True
-}
-tavily_key = os.environ.get("TAVILY_API_KEY", "")
-if tavily_key:
-    tavily_input["default"] = tavily_key
-config['inputs'] = [inp for inp in config['inputs'] if inp.get('id') != 'tavily-api-key']
-config['inputs'].append(tavily_input)
+# Remove legacy Tavily input prompts; rely on env wiring instead
+config['inputs'] = [
+    inp for inp in config['inputs']
+    if inp.get('id') not in {'tavily-api-key'}
+]
 
 # Add/refresh Context7 server
 config['servers']['context7'] = {
@@ -205,17 +198,28 @@ config['servers']['context7'] = {
     "url": "https://mcp.context7.com/mcp"
 }
 
-# Add/refresh Tavily server (prompted if key not set)
+# Add/refresh MongoDB server
+config['servers']['mongodb'] = {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "mongodb-mcp-server@0.3.0"],
+    "env": {
+        "MONGODB_URI": "${env:MONGODB_URI}",
+        "MDB_MCP_LOGGERS": "stderr"
+    }
+}
+
+# Add/refresh Tavily server (reads key from environment)
 config['servers']['tavily'] = {
     "type": "http",
-    "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=${input:tavily-api-key}"
+    "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=${env:TAVILY_API_KEY}"
 }
 
 # Write updated config
 with open(config_file, 'w') as f:
     json.dump(config, f, indent=2)
 
-print(f"Updated {config_file} with Context7 and Tavily servers")
+print(f"Updated {config_file} with MongoDB/Context7/Tavily servers (env-driven)")
 PYTHON_EOF
     else
       log "Python3 not available, falling back to simple append (skipping JSON merge)"
@@ -225,54 +229,32 @@ PYTHON_EOF
   else
     # No existing file, create new one
     log "Creating new ${target_file}"
-    if [ -n "${TAVILY_API_KEY:-}" ]; then
-      cat > "${target_file}" <<EOF
+    cat > "${target_file}" <<'EOF'
 {
-  "inputs": [
-    {
-      "type": "promptString",
-      "id": "tavily-api-key",
-      "description": "Tavily API Key",
-      "default": "${TAVILY_API_KEY}",
-      "password": true
-    }
-  ],
   "servers": {
+    "mongodb": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "mongodb-mcp-server@0.3.0"
+      ],
+      "env": {
+        "MONGODB_URI": "${env:MONGODB_URI}",
+        "MDB_MCP_LOGGERS": "stderr"
+      }
+    },
     "context7": {
       "type": "http",
       "url": "https://mcp.context7.com/mcp"
     },
     "tavily": {
       "type": "http",
-      "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=\${input:tavily-api-key}"
+      "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=${env:TAVILY_API_KEY}"
     }
   }
 }
 EOF
-    else
-      cat > "${target_file}" <<'EOF'
-{
-  "inputs": [
-    {
-      "type": "promptString",
-      "id": "tavily-api-key",
-      "description": "Tavily API Key",
-      "password": true
-    }
-  ],
-  "servers": {
-    "context7": {
-      "type": "http",
-      "url": "https://mcp.context7.com/mcp"
-    },
-    "tavily": {
-      "type": "http",
-      "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=${input:tavily-api-key}"
-    }
-  }
-}
-EOF
-    fi
   fi
 
   log "VS Code MCP config updated at ${target_file}"
@@ -317,4 +299,3 @@ PROMPT='%n@%m:%~%# '
 EOF
   log "Appended codex-dotfiles zshrc block to ~/.zshrc"
 fi
-
