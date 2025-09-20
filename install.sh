@@ -198,17 +198,6 @@ config['servers']['context7'] = {
     "url": "https://mcp.context7.com/mcp"
 }
 
-# Add/refresh MongoDB server
-config['servers']['mongodb'] = {
-    "type": "stdio",
-    "command": "npx",
-    "args": ["-y", "mongodb-mcp-server@0.3.0"],
-    "env": {
-        "MONGODB_URI": "${env:MONGODB_URI}",
-        "MDB_MCP_LOGGERS": "stderr"
-    }
-}
-
 # Add/refresh Tavily server (reads key from environment)
 config['servers']['tavily'] = {
     "type": "http",
@@ -219,7 +208,7 @@ config['servers']['tavily'] = {
 with open(config_file, 'w') as f:
     json.dump(config, f, indent=2)
 
-print(f"Updated {config_file} with MongoDB/Context7/Tavily servers (env-driven)")
+print(f"Updated {config_file} with Context7/Tavily servers (env-driven)")
 PYTHON_EOF
     else
       log "Python3 not available, falling back to simple append (skipping JSON merge)"
@@ -232,18 +221,6 @@ PYTHON_EOF
     cat > "${target_file}" <<'EOF'
 {
   "servers": {
-    "mongodb": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "mongodb-mcp-server@0.3.0"
-      ],
-      "env": {
-        "MONGODB_URI": "${env:MONGODB_URI}",
-        "MDB_MCP_LOGGERS": "stderr"
-      }
-    },
     "context7": {
       "type": "http",
       "url": "https://mcp.context7.com/mcp"
